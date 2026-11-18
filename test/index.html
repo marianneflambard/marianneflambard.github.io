@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Test Three.js</title>
+<style>
+  :root { --fond: #1b1720; --texte: #f3e9f1; --doux: #b9a7b8; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: var(--fond); color: var(--texte); font-family: Georgia, serif; }
+  /* 100lvh : la hauteur avec la barre d'adresse cachée, elle ne bouge pas quand la barre va et vient */
+  canvas#scene { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; height: 100lvh; display: block; z-index: 0; }
+  #temoin { position: fixed; top: 8px; left: 8px; z-index: 3; font: 12px monospace; color: #ffb3c7; background: #000a; padding: 4px 8px; border-radius: 6px; display: none; }
+  main { position: relative; z-index: 1; pointer-events: none; }
+  section { min-height: 100vh; display: flex; align-items: flex-end; padding: 0 16px 12vh; }
+  section:nth-child(even) { justify-content: flex-end; text-align: right; }
+  .carte { max-width: 22rem; }
+  h1 { font-size: clamp(2rem, 7vw, 4rem); font-weight: normal; letter-spacing: .02em; }
+  p { color: var(--doux); font-size: 1.05rem; line-height: 1.5; margin-top: .5rem; }
+  #chargement { position: fixed; inset: 0; display: grid; place-items: center; z-index: 2; color: var(--doux); transition: opacity .6s; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="temoin"></div>
+<div id="chargement">le pain de mie arrive…</div>
+<main>
+  <section><div class="carte"><h1>Pick up your order</h1><p>Heart, egg and sliced bread. Fais défiler.</p></div></section>
+  <section><div class="carte"><h1>De près</h1><p>La caméra descend vers l'œuf.</p></div></section>
+  <section><div class="carte"><h1>Par-dessus</h1><p>Vue du dessus, comme une assiette posée.</p></div></section>
+  <section><div class="carte"><h1>Fin du test</h1><p>Si tu vois ça bouger sur ton téléphone, Three.js passe.</p></div></section>
+</main>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const canvas = document.getElementById('scene');
+const telephone = matchMedia('(pointer: coarse)').matches;
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: !telephone, powerPreference: 'low-power' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, telephone ? 1.5 : 2));
+
+// Témoin : si le téléphone coupe la 3D, on le voit écrit en haut à gauche
+const temoin = document.getElementById('temoin');
+function signale(msg) { temoin.textContent = msg; temoin.style.display = 'block'; }
+canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); signale('3D coupée par le téléphone (contexte perdu)'); });
+canvas.addEventListener('webglcontextrestored', () => { signale('3D revenue, on recharge…'); setTimeout(() => location.reload(), 400); });
+addEventListener('error', (e) => signale('Erreur : ' + e.message));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#1b1720');
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+const soleil = new THREE.DirectionalLight('#ffe8d6', 2);
+soleil.position.set(2, 4, 3);
+scene.add(soleil);
+
+const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+const pivot = new THREE.Group();   // le modèle tourne dans ce groupe
+scene.add(pivot);
+
+// Les positions de caméra, une par section (le scroll passe de l'une à l'autre)
+const vues = [
+  { pos: [0, 0.9, 3.2],  cible: [0, 0, 0] },
+  { pos: [0.6, 0.4, 1.5], cible: [0.1, 0, 0] },
+  { pos: [0, 3.4, 0.01], cible: [0, 0, 0] },
+  { pos: [-2.2, 1.2, 2.6], cible: [0, 0, 0] },
+];
+
+new GLTFLoader().load('h_e_s_b.glb', (gltf) => {
+  const modele = gltf.scene;
+  // Le fichier est minuscule (quelques centimètres) : on le recentre et on le met à la taille 2
+  const boite = new THREE.Box3().setFromObject(modele);
+  const taille = boite.getSize(new THREE.Vector3()).length();
+  modele.position.sub(boite.getCenter(new THREE.Vector3()));
+  pivot.scale.setScalar(2 / taille);
+  pivot.add(modele);
+  const ch = document.getElementById('chargement');
+  ch.style.opacity = 0; setTimeout(() => ch.remove(), 700);
+}, undefined, (err) => {
+  document.getElementById('chargement').textContent = 'Le modèle ne charge pas : ' + err.message;
+});
+
+// On ne redimensionne que si la largeur change (rotation, fenêtre du PC) ou si la hauteur
+// bouge vraiment : la barre d'adresse du téléphone qui va et vient est ignorée
+let derniere = { l: 0, h: 0 };
+function redimensionne() {
+  const l = canvas.clientWidth, h = canvas.clientHeight;
+  if (l === derniere.l && Math.abs(h - derniere.h) < 150) return;
+  derniere = { l, h };
+  renderer.setSize(l, h, false);
+  camera.aspect = l / h;
+  // Sur téléphone (écran étroit), on recule un peu
+  camera.fov = camera.aspect < 0.8 ? 50 : 35;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', redimensionne);
+redimensionne();
+
+const pos = new THREE.Vector3(), cible = new THREE.Vector3();
+const posLisse = new THREE.Vector3(...vues[0].pos), cibleLisse = new THREE.Vector3();
+const a = new THREE.Vector3(), b = new THREE.Vector3();
+
+function vueAuScroll() {
+  const max = document.documentElement.scrollHeight - innerHeight;
+  // clamp : le rebond de l'iPhone donne un scroll négatif en haut, ou trop grand en bas
+  const t = max > 0 ? THREE.MathUtils.clamp(scrollY / max, 0, 1) * (vues.length - 1) : 0;
+  const i = Math.min(Math.floor(t), vues.length - 2);
+  const f = THREE.MathUtils.smootherstep(t - i, 0, 1);
+  pos.lerpVectors(a.fromArray(vues[i].pos), b.fromArray(vues[i + 1].pos), f);
+  cible.lerpVectors(a.fromArray(vues[i].cible), b.fromArray(vues[i + 1].cible), f);
+}
+
+const horloge = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = horloge.getDelta();
+  pivot.rotation.y += dt * 0.4;                 // il tourne tout seul
+  vueAuScroll();
+  posLisse.lerp(pos, 1 - Math.exp(-dt * 6));    // la caméra suit le scroll en douceur
+  cibleLisse.lerp(cible, 1 - Math.exp(-dt * 6));
+  camera.position.copy(posLisse);
+  camera.lookAt(cibleLisse);
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
