@@ -4,33 +4,46 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Test : le chemin</title>
+<title>Test : le chemin, étape 3</title>
 <style>
-  :root { --nuit: #0e0a14; --texte: #f3e9d6; --doux: #b6a7a0; }
+  :root { --nuit: #07050b; --texte: #f3e9d6; --doux: #b6a7a0; }
   * { box-sizing: border-box; margin: 0; }
   html, body { background: var(--nuit); color: var(--texte); font-family: Georgia, serif; }
   canvas#scene { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; height: 100lvh; display: block; }
   /* La hauteur de la page donne la longueur du chemin : on avance en faisant défiler. */
-  #piste { height: 1400vh; }
+  #piste { height: 1800vh; }
   #aide { position: fixed; left: 0; right: 0; bottom: 8vh; text-align: center; color: var(--doux); font-size: 1rem; transition: opacity 1.2s; pointer-events: none; padding: 0 16px; }
   #etape { position: fixed; top: 12px; left: 12px; font: 13px monospace; color: var(--doux); opacity: .6; }
+  #erreur { position: fixed; left: 8px; right: 8px; top: 34px; background: #e0687c; color: #fff; font: 12px monospace; padding: 8px; border-radius: 6px; display: none; z-index: 9; white-space: pre-wrap; }
 </style>
 </head>
 <body>
 <canvas id="scene"></canvas>
 <div id="etape"></div>
+<div id="erreur"></div>
 <div id="aide">Fais défiler pour suivre la lumière.</div>
 <div id="piste"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
+// Témoin d'erreur : sur téléphone, les erreurs JavaScript sont invisibles sans lui.
+(function () {
+  const box = document.getElementById("erreur");
+  const show = (m) => { box.style.display = "block"; box.textContent += m + "\n"; };
+  addEventListener("error", (e) => show("Erreur : " + e.message + " (ligne " + e.lineno + ")"));
+  addEventListener("unhandledrejection", (e) => show("Promesse : " + e.reason));
+  document.getElementById("scene").addEventListener("webglcontextlost", () => show("Contexte WebGL perdu"));
+})();
+
 (function () {
   const S = THREE.MathUtils.smoothstep;
+  const clamp01 = (x) => Math.min(1, Math.max(0, x));
   const canvas = document.getElementById("scene");
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(60, 1, 0.05, 120);
+  const camera = new THREE.PerspectiveCamera(60, 1, 0.05, 140);
+  const add = (o, parent) => { (parent || scene).add(o); return o; };
 
   function canvasTex(w, h, draw) {
     const c = document.createElement("canvas"); c.width = w; c.height = h;
@@ -40,6 +53,10 @@
     const r = g.createRadialGradient(w / 2, w / 2, 0, w / 2, w / 2, w / 2);
     r.addColorStop(0, "rgba(255,255,255,1)"); r.addColorStop(0.4, "rgba(255,255,255,.6)"); r.addColorStop(1, "rgba(255,255,255,0)");
     g.fillStyle = r; g.fillRect(0, 0, w, w);
+  });
+  const textTex = (txt, size) => canvasTex(640, 96, (g, w, h) => {
+    g.font = "italic " + (size || 38) + "px Georgia, serif"; g.textAlign = "center"; g.textBaseline = "middle";
+    g.shadowColor = "rgba(255,210,140,.8)"; g.shadowBlur = 14; g.fillStyle = "#fff3da"; g.fillText(txt, w / 2, h / 2);
   });
   const bunnyTex = canvasTex(128, 160, (g) => {
     g.fillStyle = "#fffaf0";
@@ -58,99 +75,185 @@
     g.fillStyle = "#3a2a24"; g.beginPath(); g.arc(2, -116, 21, Math.PI, 0); g.fill();
     g.restore();
   });
-  const add = (o) => { scene.add(o); return o; };
-  const glowSprite = (color) => new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTex, color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+  const glowSprite = (color) => new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTex, color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
 
-  const hemi = add(new THREE.HemisphereLight(0xfff3d6, 0x8a6a78, 0.9));
-  const lamp = add(new THREE.PointLight(0xffd27a, 1.1, 16));
+  // ---- Les lieux : repères communs ----
+  const FLOOR = -1.6;                       // le sol du château (et le bas du tunnel)
+  const TUN_Y = 0.5, TUN_R = 2.1;           // le tunnel : axe et rayon
+  const TUN_END = -65;                      // la porte du château
+  const HALL = new THREE.Vector3(0, FLOOR, -76), HR = 11, HH = 8;   // centre, rayon, hauteur de la grande salle
+  const DOOR_W = 2.6, DOOR_H = 4.2;
+  const NOPEN = 6, STEP = (Math.PI * 2) / NOPEN;                     // 6 ouvertures : l'entrée (angle 0) et 5 chemins
+  const gap = DOOR_W / HR;
+
+  const hemi = add(new THREE.HemisphereLight(0xfff3d6, 0x6a4a58, 0.05));
+  const lamp = add(new THREE.PointLight(0xffd27a, 1.0, 11));
+  const hallLight = add(new THREE.PointLight(0xffe2a8, 0, 40)); hallLight.position.set(HALL.x, HH - 1, HALL.z);
   const stone = new THREE.MeshLambertMaterial({ color: 0xf0e2c4 });
+  const wallMat = new THREE.MeshLambertMaterial({ color: 0xeedcbc, side: THREE.DoubleSide });
+  const floorMat = new THREE.MeshLambertMaterial({ color: 0xd9c19a });
 
-  // Le terrier : des anneaux pastel, très sombres
-  const RINGS = 60, PER = 40, R = 1.9, N = RINGS * PER;
+  // ---- Le tunnel : long, très sombre, les anneaux pastel à peine visibles ----
+  // la paroi est pleine et opaque : un mur de terre pourpre, des côtes pastel tous les 3 mètres
+  const wallTex = canvasTex(64, 64, (g, w) => {
+    g.fillStyle = "#3a2b45"; g.fillRect(0, 0, w, w);
+    for (let i = 0; i < 260; i++) { g.fillStyle = "rgba(" + (i % 2 ? "20,12,28" : "90,70,105") + ",.35)"; g.fillRect(Math.random() * w, Math.random() * w, 2 + Math.random() * 4, 2 + Math.random() * 3); }
+  });
+  wallTex.wrapS = wallTex.wrapT = THREE.RepeatWrapping; wallTex.repeat.set(8, 40);
+  const tube = add(new THREE.Mesh(new THREE.CylinderGeometry(TUN_R, TUN_R, 66, 20, 1, true), new THREE.MeshLambertMaterial({ map: wallTex, side: THREE.BackSide })));
+  tube.rotation.x = Math.PI / 2; tube.position.set(0, TUN_Y, TUN_END + 33);
+  const ribGeo = new THREE.TorusGeometry(TUN_R - 0.04, 0.1, 8, 24);
+  for (let i = 0; i < 22; i++) {
+    const rib = add(new THREE.Mesh(ribGeo, new THREE.MeshLambertMaterial({ color: [0xf6d98f, 0xf4a7b4, 0xc9b8ee, 0xfff1c9][i % 4] })));
+    rib.position.set(0, TUN_Y, TUN_END + 1 + i * 3);
+  }
+  const RINGS = 130, PER = 28, N = RINGS * PER;
   const tpos = new Float32Array(N * 3), tcol = new Float32Array(N * 3), tbase = new Float32Array(N * 3);
   const pastels = [0xf6d98f, 0xf4a7b4, 0xc9b8ee, 0xfff1c9]; const c = new THREE.Color();
   for (let r = 0, p = 0; r < RINGS; r++) {
     c.set(pastels[r % 4]);
     for (let k = 0; k < PER; k++, p++) {
       const a = (k / PER) * Math.PI * 2 + r * 0.21;
-      tbase[p * 3] = Math.cos(a); tbase[p * 3 + 1] = Math.sin(a); tbase[p * 3 + 2] = -(r / RINGS) * 12;
+      tbase[p * 3] = Math.cos(a); tbase[p * 3 + 1] = Math.sin(a); tbase[p * 3 + 2] = -(r / RINGS) * 66 + 1;
       tcol[p * 3] = c.r; tcol[p * 3 + 1] = c.g; tcol[p * 3 + 2] = c.b;
     }
   }
   const tgeo = new THREE.BufferGeometry();
   tgeo.setAttribute("position", new THREE.BufferAttribute(tpos, 3));
   tgeo.setAttribute("color", new THREE.BufferAttribute(tcol, 3));
-  const tmat = new THREE.PointsMaterial({ size: 0.1, map: dotTex, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+  const tmat = new THREE.PointsMaterial({ size: 0.09, map: dotTex, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
   add(new THREE.Points(tgeo, tmat));
 
-  // Les objets en vrac qui remontent (dessins provisoires, remplacés plus tard par ses modèles 3D)
-  const objTex = [
-    canvasTex(64, 64, (x) => { x.fillStyle = "#d9a35a"; x.beginPath(); x.moveTo(10, 58); x.lineTo(10, 26); x.arc(32, 24, 22, Math.PI, 0); x.lineTo(54, 58); x.closePath(); x.fill(); x.fillStyle = "#fff2cf"; x.beginPath(); x.moveTo(15, 54); x.lineTo(15, 27); x.arc(32, 25, 17, Math.PI, 0); x.lineTo(49, 54); x.closePath(); x.fill(); }),
-    canvasTex(64, 64, (x) => { x.fillStyle = "#e0687c"; x.beginPath(); x.ellipse(22, 48, 10, 8, -0.4, 0, 7); x.fill(); x.fillRect(29, 10, 5, 38); x.fillRect(29, 10, 20, 6); }),
-    canvasTex(64, 64, (x) => { x.strokeStyle = "#c9b8ee"; x.lineWidth = 4; x.beginPath(); for (let a = 0; a < 16; a += 0.2) { const r = a * 1.6; x.lineTo(32 + Math.cos(a) * r, 32 + Math.sin(a) * r); } x.stroke(); }),
-    canvasTex(64, 64, (x) => { x.fillStyle = "#fff6dc"; x.fillRect(12, 8, 40, 48); x.fillStyle = "#8a6a78"; for (let l = 0; l < 5; l++) x.fillRect(17, 16 + l * 8, 30 - (l % 2) * 10, 3); }),
-    canvasTex(64, 64, (x) => { x.fillStyle = "#f6d98f"; x.beginPath(); for (let k = 0; k < 10; k++) { const r = k % 2 ? 11 : 26, a = k * Math.PI / 5 - Math.PI / 2; x.lineTo(32 + Math.cos(a) * r, 32 + Math.sin(a) * r); } x.fill(); })
+  // ---- Les bribes de moi dans le tunnel (provisoires : mes mots et des dessins de remplacement) ----
+  const objDraw = [
+    (x) => { x.fillStyle = "#f3dcae"; x.beginPath(); x.moveTo(12, 54); x.lineTo(12, 28); x.arc(22, 24, 10, Math.PI, 0); x.arc(42, 24, 10, Math.PI, 0); x.lineTo(52, 54); x.closePath(); x.fill(); x.fillStyle = "#d9a35a"; x.fillRect(12, 50, 40, 5); },   // pain de mie
+    (x) => { x.fillStyle = "#dfe3ea"; x.beginPath(); x.moveTo(8, 36); x.lineTo(40, 22); x.lineTo(54, 30); x.lineTo(40, 40); x.closePath(); x.fill(); x.fillStyle = "#8a6a78"; x.fillRect(4, 34, 14, 7); },  // couteau
+    (x) => { x.fillStyle = "#f4a7b4"; for (let k = 0; k < 5; k++) { const a = k * 1.2566; x.beginPath(); x.arc(32 + Math.cos(a) * 12, 32 + Math.sin(a) * 12, 10, 0, 7); x.fill(); } x.fillStyle = "#f6d98f"; x.beginPath(); x.arc(32, 32, 7, 0, 7); x.fill(); },   // fleur
+    (x) => { x.fillStyle = "#e0687c"; x.beginPath(); x.moveTo(32, 54); x.bezierCurveTo(2, 34, 10, 8, 32, 22); x.bezierCurveTo(54, 8, 62, 34, 32, 54); x.fill(); },   // cœur
+    (x) => { x.strokeStyle = "#f6d98f"; x.lineWidth = 5; x.beginPath(); x.arc(20, 32, 10, 0, 7); x.moveTo(30, 32); x.lineTo(56, 32); x.moveTo(48, 32); x.lineTo(48, 42); x.moveTo(56, 32); x.lineTo(56, 40); x.stroke(); },   // clé
+    (x) => { x.strokeStyle = "#c9b8ee"; x.lineWidth = 4; x.beginPath(); for (let a = 0; a < 16; a += 0.2) { const r = a * 1.6; x.lineTo(32 + Math.cos(a) * r, 32 + Math.sin(a) * r); } x.stroke(); }   // spirale
   ];
-  const objs = [];
-  for (let i = 0; i < 34; i++) {
-    const sp = add(new THREE.Sprite(new THREE.SpriteMaterial({ map: objTex[i % objTex.length], transparent: true, depthWrite: false })));
-    const a = Math.random() * Math.PI * 2, r = 0.5 + Math.random() * 1.1, s = 0.25 + Math.random() * 0.3;
-    sp.scale.set(s, s, 1); sp.userData = { x: Math.cos(a) * r, z: -1 - i * 0.34, off: Math.random() * 4, v: 0.5 + Math.random() * 0.9, rot: (Math.random() - 0.5) * 2 };
-    objs.push(sp);
+  const words = ["ma petite âme, mon petit cœur", "sacré · moelleux · mélancolique", "tout est un passage", "la tendresse de mon cœur", "des choses mignonnes et étranges", "spooky", "la vie que je vois"];
+  const bribes = [];
+  for (let i = 0; i < 13; i++) {
+    const isText = i % 2 === 0;
+    const tex = isText ? textTex(words[(i / 2) | 0]) : canvasTex(64, 64, objDraw[((i - 1) / 2) | 0]);
+    const sp = add(new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, opacity: 0 })));
+    const a = (i * 2.4) % (Math.PI * 2), rr = isText ? 1.15 : 1.5;
+    sp.position.set(Math.cos(a) * rr, TUN_Y + Math.sin(a) * rr * 0.8, -6 - i * 4.6);
+    isText ? sp.scale.set(2.6, 0.39, 1) : sp.scale.set(0.7, 0.7, 1);
+    bribes.push(sp);
   }
 
-  // Le parvis et le château
-  const ground = add(new THREE.Mesh(new THREE.PlaneGeometry(30, 14), new THREE.MeshLambertMaterial({ color: 0xd9c19a })));
-  ground.rotation.x = -Math.PI / 2; ground.position.set(0, -1.6, -17);
-  const wallMat = new THREE.MeshLambertMaterial({ color: 0xeedcbc });
-  const box = (w, h, d, x, y, z, m) => { const b = add(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m || wallMat)); b.position.set(x, y, z); return b; };
-  box(4.9, 9, 0.8, -3.55, 2.9, -20); box(4.9, 9, 0.8, 3.55, 2.9, -20); box(2.2, 4.5, 0.8, 0, 5.15, -20);
-  add(new THREE.Mesh(new THREE.TorusGeometry(1.1, 0.16, 8, 24, Math.PI), stone)).position.set(0, 1.8, -19.55);
-  [-6.4, 6.4].forEach((x) => {
-    add(new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.2, 11, 16), wallMat)).position.set(x, 3.9, -20);
-    add(new THREE.Mesh(new THREE.ConeGeometry(1.4, 2.6, 16), new THREE.MeshLambertMaterial({ color: 0xe48a98 }))).position.set(x, 10.7, -20);
-  });
-  const colG = new THREE.CylinderGeometry(0.16, 0.2, 3.4, 12);
-  for (let i = 0; i < 3; i++) [-2.6, 2.6].forEach((x) => add(new THREE.Mesh(colG, stone)).position.set(x, 0.1, -13.5 - i * 2));
+  // ---- Le château : la grande salle ronde, au centre d'une araignée ----
+  const hall = add(new THREE.Group()); hall.position.copy(HALL);
+  const floor = add(new THREE.Mesh(new THREE.CircleGeometry(HR, 48), floorMat), hall);
+  floor.rotation.x = -Math.PI / 2; floor.position.y = 0.0;
+  // le sol dessine l'araignée : un rond au centre, un rayon vers chaque chemin
+  const rayMat = new THREE.MeshBasicMaterial({ color: 0xe48a98 });
+  const rosette = add(new THREE.Mesh(new THREE.RingGeometry(1.0, 1.25, 40), rayMat), hall);
+  rosette.rotation.x = -Math.PI / 2; rosette.position.y = 0.02;
+  for (let k = 1; k < NOPEN; k++) {
+    const ray = add(new THREE.Mesh(new THREE.PlaneGeometry(0.16, HR - 1.25), rayMat), hall);
+    ray.rotation.x = -Math.PI / 2; ray.rotation.z = -k * STEP; ray.position.set(Math.sin(k * STEP) * (HR / 2 + 0.6), 0.02, Math.cos(k * STEP) * (HR / 2 + 0.6));
+  }
+  // les murs entre les ouvertures, et le linteau au-dessus de chacune
+  for (let k = 0; k < NOPEN; k++) {
+    const t0 = k * STEP + gap / 2, len = STEP - gap;
+    const wall = add(new THREE.Mesh(new THREE.CylinderGeometry(HR, HR, HH, 14, 1, true, t0, len), wallMat), hall); wall.position.y = HH / 2;
+    const lh = HH - DOOR_H;
+    const lintel = add(new THREE.Mesh(new THREE.CylinderGeometry(HR, HR, lh, 6, 1, true, k * STEP - gap / 2, gap), wallMat), hall); lintel.position.y = DOOR_H + lh / 2;
+    const arch = add(new THREE.Mesh(new THREE.TorusGeometry(DOOR_W / 2, 0.12, 8, 20, Math.PI), stone), hall);
+    arch.position.set(Math.sin(k * STEP) * (HR - 0.05), DOOR_H - DOOR_W / 2, Math.cos(k * STEP) * (HR - 0.05)); arch.rotation.y = k * STEP;
+  }
+  // colonnes entre les ouvertures
+  const colG = new THREE.CylinderGeometry(0.22, 0.26, HH - 0.6, 10);
+  for (let k = 0; k < NOPEN; k++) {
+    const a = k * STEP + STEP / 2;
+    add(new THREE.Mesh(colG, stone), hall).position.set(Math.sin(a) * (HR - 0.9), (HH - 0.6) / 2, Math.cos(a) * (HR - 0.9));
+  }
+  // la coupole, avec un œil de lumière au centre
+  const dome = add(new THREE.Mesh(new THREE.SphereGeometry(HR, 32, 10, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshLambertMaterial({ color: 0xe9d3b0, side: THREE.BackSide })), hall);
+  dome.position.y = HH; dome.scale.y = 0.55;
+  const oculus = add(glowSprite(0xffe7a0), hall); oculus.position.set(0, HH + HR * 0.55 - 0.3, 0); oculus.scale.set(8, 8, 1);
 
+  // les 5 chemins : un couloir par porte, l'un monte, l'un descend, les autres restent plats
+  const paths = [
+    { nom: "3D et jeu", type: "monte", glow: 0xf6d98f },
+    { nom: "Image et scène", type: "plat", glow: 0xf4a7b4 },
+    { nom: "Écriture", type: "monte", glow: 0xc9b8ee },
+    { nom: "À propos", type: "descend", glow: 0xfff1c9 },
+    { nom: "Contact", type: "plat", glow: 0xe48a98 }
+  ];
+  const L = 14;
+  paths.forEach((p, i) => {
+    const k = i + 1, g = add(new THREE.Group(), hall); g.rotation.y = k * STEP;   // l'axe z local pointe vers la porte
+    const cf = add(new THREE.Mesh(new THREE.BoxGeometry(DOOR_W + 0.4, 0.2, L), floorMat), g); cf.position.set(0, -0.1, HR + L / 2);
+    [-1, 1].forEach((s) => { const w = add(new THREE.Mesh(new THREE.BoxGeometry(0.2, 6, L), wallMat), g); w.position.set(s * (DOOR_W / 2 + 0.1), 3, HR + L / 2); });
+    const ce = add(new THREE.Mesh(new THREE.BoxGeometry(DOOR_W + 0.4, 6, 0.2), wallMat), g); ce.position.set(0, 3, HR + L);
+    if (p.type !== "plat") {
+      const dir = p.type === "monte" ? 1 : -1;
+      for (let s = 0; s < 9; s++) {
+        const top = dir * (s + 1) * 0.28;
+        const st = add(new THREE.Mesh(new THREE.BoxGeometry(DOOR_W, 0.28, 0.7), stone), g);
+        st.position.set(0, top - 0.14, HR + 1.5 + s * 0.7);
+      }
+    }
+    const end = add(glowSprite(p.glow), g); end.position.set(0, 1.6, HR + L - 0.4); end.scale.set(4.4, 4.4, 1);
+    // le nom de la porte, au-dessus (provisoire : le plan du site reste à écrire)
+    const lab = add(new THREE.Sprite(new THREE.SpriteMaterial({ map: textTex(p.nom, 46), transparent: true, depthWrite: false, fog: false })), hall);
+    lab.position.set(Math.sin(k * STEP) * (HR - 0.4), DOOR_H + 1.3, Math.cos(k * STEP) * (HR - 0.4)); lab.scale.set(3.6, 0.54, 1);
+  });
+
+  // la porte d'entrée, que la fille ouvre (le lapin passe à travers)
   const doorMat = new THREE.MeshLambertMaterial({ color: 0xb9774f });
-  const hinges = [-1.1, 1.1].map((x) => {
-    const h = add(new THREE.Group()); h.position.set(x, -1.6, -19.6);
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(1.1, 3.4, 0.1), doorMat);
-    panel.position.set(x < 0 ? 0.55 : -0.55, 1.7, 0); h.add(panel); return h;
+  const hinges = [-1, 1].map((s) => {
+    const h = add(new THREE.Group()); h.position.set(s * DOOR_W / 2, FLOOR, TUN_END + 0.05);
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(DOOR_W / 2, DOOR_H, 0.1), doorMat);
+    panel.position.set(-s * DOOR_W / 4, DOOR_H / 2, 0); h.add(panel); return h;
   });
-  const doorGlow = add(glowSprite(0xffe08a)); doorGlow.position.set(0, 0, -19.3);
+  const doorGlow = add(glowSprite(0xffe08a)); doorGlow.position.set(0, 0.4, TUN_END - 0.6);
 
-  // La montée vers les cieux
-  for (let i = 0; i < 11; i++) {
-    const z = -22 - i * 3, y = -1.6 + i * 0.65;
-    box(3.6, 0.65, 3, 0, y + 0.325, z, new THREE.MeshLambertMaterial({ color: 0xe3cfa8 }));
-    [-1.8, 1.8].forEach((x) => add(new THREE.Mesh(colG, stone)).position.set(x, y + 2.35, z));
-    add(new THREE.Mesh(new THREE.TorusGeometry(1.8, 0.11, 8, 24, Math.PI), stone)).position.set(0, y + 4.05, z);
-  }
-  const heaven = add(glowSprite(0xffe7a0)); heaven.position.set(0, 7.5, -58); heaven.scale.set(14, 14, 1);
-
-  // Le guide : un point de lumière qui devient le lapin, puis la fille penchée
-  const mk = (tex) => new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  // ---- Le guide : un point de lumière qui devient le lapin, puis la fille penchée ----
+  const mk = (tex) => new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, fog: false }));
   const guide = add(new THREE.Group());
-  const bunny = mk(bunnyTex), girl = mk(girlTex), light = glowSprite(0xffd36b);
-  guide.add(bunny, girl, light);
-  const bunnyGlow = add(glowSprite(0xfff1c9));
+  const girl = mk(girlTex), light = glowSprite(0xffd36b);
+  guide.add(girl, light);
 
-  // Le défilement : la page donne la cible, la caméra la rattrape en douceur
+  // Le lapin en 3D : une sphère pour le corps, une pour la tête, des oreilles, des pattes rondes qui flottent. Il court, de dos.
+  const bunny = add(new THREE.Group());
+  const fur = new THREE.MeshLambertMaterial({ color: 0xfffaf0 }), pink = new THREE.MeshLambertMaterial({ color: 0xf2a0ae });
+  const ball = (r, x, y, z, sx, sy, sz, m, parent) => { const o = add(new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), m || fur), parent || bunny); o.position.set(x, y, z); o.scale.set(sx || 1, sy || 1, sz || 1); return o; };
+  ball(0.24, 0, 0, 0, 1, 0.95, 1.2);                 // le corps
+  ball(0.15, 0, 0.17, -0.27);                        // la tête (le lapin regarde vers -z)
+  ball(0.07, 0, 0.0, 0.3);                           // la queue
+  [-1, 1].forEach((s) => {
+    const ear = new THREE.Group(); ear.position.set(s * 0.07, 0.3, -0.27); ear.rotation.z = -s * 0.18; bunny.add(ear);
+    ball(0.06, 0, 0.14, 0, 1, 3, 0.6, fur, ear); ball(0.035, 0, 0.14, -0.03, 1, 3, 0.3, pink, ear);
+  });
+  const paws = [[-0.16, -0.19, -0.22], [0.16, -0.19, -0.22], [-0.17, -0.2, 0.2], [0.17, -0.2, 0.2]].map((p) => ball(0.075, p[0], p[1], p[2], 1, 0.8, 1.3));
+  const bunnyLight = add(new THREE.PointLight(0xffd9a0, 0, 7));
+  const bunnyGlow = add(glowSprite(0xfff1c9));
+  let lead = 3.2, prevCamZ = 2;        // l'écart entre elle et lui : il grandit quand elle ne défile pas
+
+  scene.fog = new THREE.FogExp2(0x07050b, 0.16);
+
+  // ---- Le défilement : la page donne la cible, la caméra la rattrape en douceur ----
   let target = 0, t = 0, lastScroll = performance.now() / 1000;
   function readScroll() {
     const max = document.documentElement.scrollHeight - innerHeight;
-    target = max > 0 ? Math.min(1, Math.max(0, scrollY / max)) : 0;
+    target = max > 0 ? clamp01(scrollY / max) : 0;        // borné : le rebond iOS donne un scrollY négatif
     lastScroll = performance.now() / 1000;
-    document.getElementById("aide").style.opacity = scrollY > 40 ? 0 : 1;
   }
   addEventListener("scroll", readScroll, { passive: true });
+  // ?t=0.7 saute à un point du chemin (pour regarder une étape précise)
+  const qt = parseFloat(new URLSearchParams(location.search).get("t"));
+  if (!isNaN(qt)) addEventListener("load", () => { scrollTo(0, clamp01(qt) * (document.documentElement.scrollHeight - innerHeight)); t = target = clamp01(qt); });
 
-  // Le terrier prend les 40 premiers pour cent du défilement
-  const remap = (x) => x < 0.4 ? (x / 0.4) * 0.2 : 0.2 + ((x - 0.4) / 0.6) * 0.8;
-  const night = new THREE.Color(0x0e0a14), stage = new THREE.Color(0x1d1626), sky = new THREE.Color(0xfff0c4), bg = new THREE.Color();
-  const camPos = new THREE.Vector3(), look = new THREE.Vector3(), dir = new THREE.Vector3(), right = new THREE.Vector3();
+  // Phases de la progression tt (0 à 1) :
+  // 0 - .52 le tunnel · .52 - .60 la porte · .60 - .68 elle s'ouvre · .68 - .78 on entre · .78 - 1 la salle, on en fait le tour
+  const night = new THREE.Color(0x07050b), warm = new THREE.Color(0x2a2030), bg = new THREE.Color();
+  const camPos = new THREE.Vector3(), look = new THREE.Vector3(), dir = new THREE.Vector3(), right = new THREE.Vector3(), tmp = new THREE.Vector3();
   const etape = document.getElementById("etape");
   let idle = 0, runAhead = 0;
 
@@ -164,75 +267,104 @@
   function frame() {
     const dt = Math.min(clock.getDelta(), 0.05), time = clock.elapsedTime, now = performance.now() / 1000;
     t += (target - t) * Math.min(1, dt * 3);
-    const tt = remap(t);
+    const tt = t;
     const moving = Math.abs(target - t) > 0.0005 || now - lastScroll < 0.4;
+    const inTunnel = 1 - S(tt, 0.5, 0.62);
+    const inHall = S(tt, 0.66, 0.78);
 
-    // Sans défilement : le noir se referme, le lapin part un peu devant puis s'arrête et attend
-    idle += ((moving || tt >= 0.2 ? 0 : 1) - idle) * Math.min(1, dt * (moving ? 3 : 0.8));
+    // Sans défilement, dans le tunnel : le noir se referme, le lapin part un peu devant puis attend
+    idle += ((moving || tt >= 0.52 ? 0 : 1) - idle) * Math.min(1, dt * (moving ? 3 : 0.8));
     runAhead += ((moving ? 0 : 3.2) - runAhead) * Math.min(1, dt * (moving ? 2.5 : 0.7));
-    const inBurrow = 1 - S(tt, 0.17, 0.22);
 
     for (let i = 0; i < N; i++) {
-      const zz = tbase[i * 3 + 2], br = R * (1 + Math.sin(time * 0.9 + zz * 0.8) * 0.05);
-      tpos[i * 3] = tbase[i * 3] * br; tpos[i * 3 + 1] = tbase[i * 3 + 1] * br + zz * 0.04; tpos[i * 3 + 2] = zz;
+      const zz = tbase[i * 3 + 2], br = TUN_R * 0.97 * (1 + Math.sin(time * 0.9 + zz * 0.8) * 0.04);
+      tpos[i * 3] = tbase[i * 3] * br; tpos[i * 3 + 1] = tbase[i * 3 + 1] * br + TUN_Y; tpos[i * 3 + 2] = zz;
     }
     tgeo.attributes.position.needsUpdate = true;
-    tmat.opacity = 0.35 * (1 - idle);
-    objs.forEach((o) => {
-      const d = o.userData, ph = (time * d.v + d.off) % 4;
-      o.position.set(d.x + Math.sin(time + d.off) * 0.15, -1.9 + ph, d.z);
-      o.material.rotation += d.rot * 0.02;
-      o.material.opacity = 0.75 * inBurrow * (1 - idle) * Math.min(1, ph, 4 - ph);
+    tmat.opacity = 0.1 * inTunnel;
+
+    // Caméra
+    let camZ, camY;
+    if (tt < 0.52) { camZ = 2 - S(tt, 0, 0.52) * 64; camY = 0.2; }
+    else if (tt < 0.68) { camZ = -62 - S(tt, 0.52, 0.68) * 1.2; camY = 0.2; }
+    else { camZ = -63.2 - S(tt, 0.68, 0.78) * 9.8; camY = 0.2 - S(tt, 0.68, 0.78) * 0.5; }
+    camPos.set(0, camY, camZ);
+    const yaw = S(tt, 0.8, 1.0) * Math.PI * 2;        // le tour de la salle
+    if (tt < 0.78) look.set(0, camY - 0.2 + S(tt, 0.7, 0.78) * 0.6, camZ - 5);
+    else look.set(Math.sin(yaw) * 5, camY + 0.3, camZ - Math.cos(yaw) * 5);
+    camera.position.copy(camPos); camera.position.y += Math.sin(time * 1.4) * 0.02; camera.lookAt(look);
+    lamp.position.copy(camera.position).add(tmp.set(0, 0.5, -1.4));
+    lamp.intensity = 1.0 * (1 - inHall * 0.6);
+
+    // Lumière et brouillard : très sombre dans le tunnel, la salle s'allume en entrant
+    hemi.intensity = 0.05 + S(tt, 0.6, 0.72) * 0.8;
+    hallLight.intensity = S(tt, 0.62, 0.74) * 1.1;
+    scene.fog.density = 0.16 - S(tt, 0.56, 0.7) * 0.15;
+    bg.copy(night).lerp(warm, S(tt, 0.6, 0.8)); scene.background = bg; scene.fog.color.copy(bg);
+
+    // Les bribes
+    bribes.forEach((b) => {
+      const ahead = camera.position.z - b.position.z;
+      b.material.opacity = (1 - S(ahead, 6, 10)) * S(ahead, 0, 1.5) * (1 - idle * 0.7) * inTunnel * 0.95;
     });
 
-    if (tt < 0.2) { const k = S(tt, 0, 0.2); camPos.set(0, 0.2 - k * 0.5, 2 - k * 14); look.set(0, camPos.y - 0.2, camPos.z - 5); }
-    else if (tt < 0.45) { const k = S(tt, 0.2, 0.3); camPos.set(0, -0.3 + k * 0.3, -12 - k * 2.5 - S(tt, 0.38, 0.45) * 0.5); look.set(0, 0.6 + k * 0.6, -20); }
-    else {
-      const k = S(tt, 0.45, 1), z = -15 - k * 41;
-      camPos.set(0, Math.min(Math.max(0, -z - 21) * (0.65 / 3), 6.2) + 0.3, z);
-      look.set(0, camPos.y + 0.4 + k * 1.6, z - 5);
-    }
-    camera.position.copy(camPos); camera.position.y += Math.sin(time * 1.4) * 0.02; camera.lookAt(look);
-    lamp.position.copy(camera.position).add(new THREE.Vector3(0, 0.6, -1.5));
-    hemi.intensity = 0.9 * S(tt, 0.16, 0.26) + 0.05;
+    // La porte
+    const open = S(tt, 0.6, 0.68);
+    hinges[0].rotation.y = open * 1.9; hinges[1].rotation.y = -open * 1.9;
+    const flash = Math.max(0, 1 - Math.abs(tt - 0.58) / 0.03);
+    doorGlow.material.opacity = flash + open * 0.4 * (1 - inHall); const ds = 1.5 + flash * 2.5 + open * 2; doorGlow.scale.set(ds, ds * 1.6, 1);
 
-    const open = S(tt, 0.385, 0.45);
-    hinges[0].rotation.y = -open * 1.9; hinges[1].rotation.y = open * 1.9;
-    const flash = Math.max(0, 1 - Math.abs(tt - 0.37) / 0.025);
-    doorGlow.material.opacity = flash + open * 0.5; const ds = 1.5 + flash * 2.5 + open; doorGlow.scale.set(ds, ds * 1.6, 1);
-    heaven.material.opacity = 0.4 + S(tt, 0.6, 1) * 0.6;
-
+    // Le guide
     camera.getWorldDirection(dir); right.crossVectors(dir, camera.up).normalize();
     const front = camera.position.clone().addScaledVector(dir, 2.4).addScaledVector(right, 0.35); front.y += -0.3 + Math.sin(time * 2.2) * 0.04;
-    // Au tout début, ce n'est qu'un point de lumière ; il prend la forme du lapin
     const shape = S(tt, 0.01, 0.06);
-    if (tt < 0.3) {
-      guide.position.copy(front);
-      if (tt < 0.2) guide.position.addScaledVector(dir, 0.8 + runAhead + (moving ? Math.abs(Math.sin(time * 6)) * 0.15 : 0));
-      bunny.material.opacity = shape; girl.material.opacity = 0; light.material.opacity = 0;
-    } else if (tt < 0.385) {
-      const k = S(tt, 0.3, 0.375), hop = Math.abs(Math.sin(k * Math.PI * 4)) * 0.35 * (1 - k);
-      guide.position.lerpVectors(front, new THREE.Vector3(0, -1.0, -19.5), k); guide.position.y += hop;
-      bunny.material.opacity = 1 - S(tt, 0.365, 0.385); girl.material.opacity = 0; light.material.opacity = 0;
-    } else if (tt < 0.46) {
-      guide.position.set(0, -0.95, -19.9); bunny.material.opacity = 0;
-      girl.material.opacity = light.material.opacity = S(tt, 0.39, 0.44);
-    } else {
-      guide.position.lerpVectors(new THREE.Vector3(0, -0.95, -19.9), front, S(tt, 0.46, 0.5));
-      bunny.material.opacity = 0; girl.material.opacity = light.material.opacity = 1;
-    }
-    const ls = light.material.opacity * (0.08 + Math.max(0, tt - 0.38) * 0.7) * (1 + Math.sin(time * 3) * 0.08);
-    light.scale.set(ls, ls, 1); light.position.set(0.02, -0.05, 0.01);
-    const sc = tt < 0.46 && tt > 0.3 ? 1.2 : 1;
-    bunny.scale.set(0.5 * sc * (0.3 + 0.7 * shape), 0.62 * sc * (0.3 + 0.7 * shape), 1); girl.scale.set(0.5 * sc, 0.62 * sc, 1);
-    bunnyGlow.position.copy(guide.position); bunnyGlow.position.y -= 0.05;
-    const point = 1 - shape, bgs = (bunny.material.opacity + point) * (0.9 + Math.sin(time * 2.5) * 0.1);
-    bunnyGlow.scale.set(bgs * (point ? 1 : 1.2), bgs * (point ? 1 : 1.2), 1);
-    bunnyGlow.material.opacity = Math.min(1, bunny.material.opacity * 0.7 + point);
+    const doorSpot = new THREE.Vector3(0, FLOOR + 0.45, TUN_END + 0.5);
 
-    bg.copy(stage).lerp(night, inBurrow).lerp(sky, S(tt, 0.45, 1) * 0.9);
-    scene.background = bg;
-    etape.textContent = tt < 0.2 ? "le terrier" : tt < 0.3 ? "le château" : tt < 0.45 ? "la porte" : tt < 0.9 ? "la montée" : "le cœur";
+    // Le lapin court devant : sans défilement l'écart grandit, en défilant on le rattrape
+    const advanced = Math.max(0, prevCamZ - camPos.z); prevCamZ = camPos.z;
+    const maxLead = 15 - S(tt, 0.42, 0.52) * 12;
+    lead = Math.min(maxLead, Math.max(2.6, lead + (tt < 0.52 ? 1.6 * dt : 0) - advanced));
+    const runZ = Math.max(camPos.z - lead, TUN_END + 0.6);
+    const fogF = Math.exp(-Math.pow(scene.fog.density * Math.max(0, camPos.z - runZ), 2));   // il s'efface dans le noir
+    const lost = tt < 0.52 && fogF < 0.15;
+    let bunnyOn = 0;
+    if (tt < 0.52) {
+      bunny.position.set(0, FLOOR + 0.45 + Math.abs(Math.sin(time * 9)) * 0.14, runZ); bunnyOn = shape;
+      girl.material.opacity = 0; light.material.opacity = 0;
+    } else if (tt < 0.6) {
+      const k = S(tt, 0.52, 0.575), hop = Math.abs(Math.sin(k * Math.PI * 4)) * 0.3 * (1 - k);
+      bunny.position.lerpVectors(tmp.set(0, FLOOR + 0.45, runZ), doorSpot, k); bunny.position.y += hop;
+      bunnyOn = 1 - S(tt, 0.575, 0.6); girl.material.opacity = 0; light.material.opacity = 0;
+    } else if (tt < 0.68) {
+      bunnyOn = 0; girl.material.opacity = light.material.opacity = S(tt, 0.6, 0.65);
+    } else {
+      bunnyOn = 0; girl.material.opacity = light.material.opacity = 1;
+    }
+    if (tt < 0.6) guide.position.copy(doorSpot).add(tmp.set(0, 0.6, 0.2));
+    else if (tt < 0.68) guide.position.copy(doorSpot).add(tmp.set(0, 0.6, 0.2));
+    else guide.position.lerpVectors(tmp.copy(doorSpot).add(new THREE.Vector3(0, 0.6, 0.2)), front, S(tt, 0.68, 0.74));
+    bunny.visible = bunnyOn > 0.01;
+    const bs = 1.1 * (0.3 + 0.7 * shape) * bunnyOn; bunny.scale.set(bs, bs, bs);
+    const run = tt < 0.52 ? 1 : 0.2;
+    paws.forEach((p, i) => { p.position.y = -0.19 + Math.sin(time * 18 + (i % 2) * Math.PI + (i > 1 ? 0.8 : 0)) * 0.07 * run; });
+    bunnyLight.position.set(bunny.position.x, bunny.position.y + 0.5, bunny.position.z + 0.6);
+    bunnyLight.intensity = 1.4 * bunnyOn * (tt < 0.52 ? 1 : 1 - S(tt, 0.52, 0.6));
+    const ls = light.material.opacity * (0.08 + Math.max(0, tt - 0.6) * 0.5) * (1 + Math.sin(time * 3) * 0.08);
+    light.scale.set(ls, ls, 1); light.position.set(0.02, -0.05, 0.01);
+    girl.scale.set(0.6, 0.74, 1);
+    // un halo doux autour de lui : tout au début le lapin n'est qu'un point de lumière
+    const point = 1 - shape;
+    bunnyGlow.position.copy(bunny.position); bunnyGlow.position.y += 0.1;
+    const bgs = (0.5 * bunnyOn + point * 0.7) * (0.9 + Math.sin(time * 2.5) * 0.1) * (tt < 0.52 ? fogF : 1);
+    bunnyGlow.scale.set(bgs, bgs, 1);
+    bunnyGlow.material.opacity = (tt < 0.52 ? 1 : 1 - S(tt, 0.575, 0.6));
+    if (tt < 0.52 && point > 0.5) bunny.position.copy(front).addScaledVector(dir, 0.8);
+    const aide = document.getElementById("aide");
+    if (lost) { aide.textContent = "Il court plus vite que toi. Fais défiler pour le rattraper."; aide.style.opacity = 1; }
+    else if (scrollY > 40) aide.style.opacity = 0;
+    else { aide.textContent = "Fais défiler pour suivre le lapin."; }
+
+    etape.textContent = tt < 0.52 ? "le tunnel" : tt < 0.6 ? "la porte" : tt < 0.68 ? "elle ouvre" : tt < 0.8 ? "la grande salle" : "les chemins";
 
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
